@@ -497,6 +497,25 @@ window.openModal = (q=null) => {
 };
 window.closeModal = () => { document.getElementById('modal-overlay').classList.remove('open'); editingId=null; };
 
+// Global paste handler — pastes image into the LAST focused paste area
+let lastFocusedImgId=null;
+document.addEventListener('paste', e=>{
+  if(!document.getElementById('modal-overlay').classList.contains('open')) return;
+  const items=e.clipboardData?.items;
+  if(!items) return;
+  for(let item of items){
+    if(item.type.startsWith('image/')){
+      const targetId=lastFocusedImgId||('li-1');
+      readImgFile(item.getAsFile(), targetId);
+      break;
+    }
+  }
+});
+document.addEventListener('focusin', e=>{
+  const area=e.target.closest('[id^="img-area-"]');
+  if(area) lastFocusedImgId=area.id.replace('img-area-','');
+});
+
 window.addLineItem = (data={}) => {
   lineItemCount++;
   const id=`li-${lineItemCount}`;
@@ -537,12 +556,22 @@ window.addLineItem = (data={}) => {
         <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="sellingPriceInc" value="${data.sellingPriceInc||''}" readonly></div></div>
     </div>`;
   document.getElementById('line-items-container').appendChild(div);
-  if(data.priceEx) calcLineItem(id);
+  // Seed raw values from saved data so calcSummary works immediately on edit
+  if(data.priceEx){
+    const priceEx=parseFloat(data.priceEx)||0;
+    const selEx=parseFloat(data.sellingPriceEx)||(priceEx*1.4);
+    div.dataset.rawPriceEx=priceEx;
+    div.dataset.rawSelEx=selEx;
+    calcLineItem(id);
+  }
   div.addEventListener('paste',e=>{
     const items=e.clipboardData?.items;
     if(!items)return;
     for(let item of items){ if(item.type.startsWith('image/')){ readImgFile(item.getAsFile(),id); break; } }
   });
+  // Also make the paste area focusable so Ctrl+V works when clicked
+  const pasteArea=document.getElementById(`img-area-${id}`);
+  if(pasteArea){ pasteArea.setAttribute('tabindex','0'); pasteArea.title='Click here first, then press Ctrl+V to paste image'; }
 };
 window.removeLineItem = (id) => { const el=document.getElementById(id); if(el)el.remove(); };
 
@@ -550,22 +579,28 @@ window.calcLineItem = (id) => {
   const el=document.getElementById(id); if(!el)return;
   const get=f=>el.querySelector(`[data-f="${f}"]`);
   const priceEx=parseFloat(get('priceEx').value)||0;
-  const arpc=priceEx*0.20, arpcD=priceEx*0.20, selEx=priceEx+arpc+arpcD;
-  const vat=selEx*0.15, selInc=selEx+vat;
-  get('arpcMarkup').value=fmt(arpc); get('arpcDirectMarkup').value=fmt(arpcD);
-  get('sellingPriceEx').value=fmt(selEx); get('vat').value=fmt(vat); get('sellingPriceInc').value=fmt(selInc);
-  // Store raw numeric value for accurate summing across multiple items
-  el.dataset.sellingPriceExRaw = selEx;
-  el.dataset.priceExRaw = priceEx;
+  const arpc=+(priceEx*0.20).toFixed(4);
+  const arpcD=+(priceEx*0.20).toFixed(4);
+  const selEx=+(priceEx+arpc+arpcD).toFixed(4);
+  const vat=+(selEx*0.15).toFixed(4);
+  const selInc=+(selEx+vat).toFixed(4);
+  get('arpcMarkup').value=fmt(arpc);
+  get('arpcDirectMarkup').value=fmt(arpcD);
+  get('sellingPriceEx').value=fmt(selEx);
+  get('vat').value=fmt(vat);
+  get('sellingPriceInc').value=fmt(selInc);
+  el.dataset.rawSelEx=selEx;
+  el.dataset.rawPriceEx=priceEx;
 };
 
 window.calcSummary = () => {
-  // Use raw dataset values to avoid parseFloat failing on formatted strings like "1,234.00"
   let totalEx=0;
   document.querySelectorAll('.line-item').forEach(el=>{
-    totalEx += parseFloat(el.dataset.sellingPriceExRaw)||0;
+    totalEx += parseFloat(el.dataset.rawSelEx)||0;
   });
-  const totalVat=totalEx*0.15, totalInc=totalEx+totalVat;
+  totalEx=+totalEx.toFixed(4);
+  const totalVat=+(totalEx*0.15).toFixed(4);
+  const totalInc=+(totalEx+totalVat).toFixed(4);
   const qp=parseFloat(document.getElementById('f-quotedprice').value)||0;
   const cc=parseFloat(document.getElementById('f-courier').value)||0;
   document.getElementById('f-total-selling-ex').value=fmt(totalEx);
@@ -579,13 +614,18 @@ function getLineItems(){
   document.querySelectorAll('.line-item').forEach(el=>{
     const get=f=>el.querySelector(`[data-f="${f}"]`)?.value||'';
     const imgEl=el.querySelector(`[id^="img-preview-"]`);
-    // Store raw numeric values so dashboard/quotes tab calculations are accurate
-    const priceEx=parseFloat(el.dataset.priceExRaw)||parseFloat(get('priceEx'))||0;
-    const selEx=parseFloat(el.dataset.sellingPriceExRaw)||(priceEx*1.4);
-    items.push({ make:get('make'),model:get('model'),partDesc:get('partDesc'),partNum:get('partNum'),
-      priceEx:priceEx, arpcMarkup:priceEx*0.2, arpcDirectMarkup:priceEx*0.2,
-      sellingPriceEx:selEx, vat:selEx*0.15, sellingPriceInc:selEx*1.15,
-      partImage:imgEl?.src||'' });
+    const priceEx=parseFloat(el.dataset.rawPriceEx)||parseFloat(get('priceEx'))||0;
+    const selEx=parseFloat(el.dataset.rawSelEx)||(priceEx*1.4);
+    const arpc=+(priceEx*0.2).toFixed(4);
+    const vat=+(selEx*0.15).toFixed(4);
+    items.push({
+      make:get('make'), model:get('model'), partDesc:get('partDesc'), partNum:get('partNum'),
+      priceEx:+priceEx.toFixed(4),
+      arpcMarkup:arpc, arpcDirectMarkup:arpc,
+      sellingPriceEx:+selEx.toFixed(4),
+      vat:vat, sellingPriceInc:+(selEx+vat).toFixed(4),
+      partImage:imgEl?.src||''
+    });
   });
   return items;
 }
@@ -721,7 +761,7 @@ function renderDashboard(){
     return `<div class="user-row"><div style="display:flex;align-items:center;gap:8px"><div class="avatar">${initials}</div><span style="font-size:13px">${name}</span></div><div style="text-align:right"><span style="font-size:13px;font-weight:500">${d.count}</span><br><span class="mono" style="font-size:11px;color:var(--text3)">R ${fmt(d.value)}</span></div></div>`;
   }).join('')||'<div style="color:var(--text3);font-size:13px">No data</div>';
   const monthlyData={}; MONTHS.forEach(m=>monthlyData[m]=0);
-  allQ.forEach(q=>{ if(q.month){const items=q.lineItems||[];monthlyData[q.month]=(monthlyData[q.month]||0)+items.reduce((s,i)=>s+(parseFloat(String(i.sellingPriceEx).replace(/,/g,''))||0),0);}});
+  allQ.forEach(q=>{ if(q.month){const items=q.lineItems||[];monthlyData[q.month]=(monthlyData[q.month]||0)+items.reduce((s,i)=>s+(parseFloat(i.sellingPriceEx)||0),0);}});
   const maxVal=Math.max(...Object.values(monthlyData),1);
   document.getElementById('monthly-chart').innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'+MONTHS.map(m=>{
     const val=monthlyData[m], pct=Math.round((val/maxVal)*100);
