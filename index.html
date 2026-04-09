@@ -308,17 +308,13 @@
       <div class="form-section">
         <div class="form-section-title">Pricing Summary</div>
         <div class="form-grid">
-          <div><label class="form-label">Quoted Price (ZAR) *</label>
-            <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" id="f-quotedprice" placeholder="0.00" oninput="calcSummary()"></div></div>
-          <div><label class="form-label">Courier Costs (ZAR)</label>
-            <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" id="f-courier" placeholder="0.00" oninput="calcSummary()"></div></div>
           <div><label class="form-label">Total Selling Price Excl. VAT</label>
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-total-selling-ex" readonly></div></div>
           <div><label class="form-label">Total VAT (15%)</label>
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-total-vat" readonly></div></div>
           <div><label class="form-label">Total Selling Price Incl. VAT</label>
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-total-selling-inc" readonly></div></div>
-          <div><label class="form-label">Final Price (Quoted + Courier)</label>
+          <div><label class="form-label">Total Final Price (All parts)</label>
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-final" readonly></div></div>
         </div>
       </div>
@@ -441,7 +437,7 @@ function renderQuotes(){
   tbody.innerHTML=quotes.sort((a,b)=>(a.day||0)-(b.day||0)).map(q=>{
     const items=q.lineItems||[];
     const partNames=items.map(i=>i.partDesc||'—').join(', ');
-    const finalPrice=(parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0);
+    const finalPrice=parseFloat(q.finalPrice)||((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0));
     return `<tr>
       <td class="mono">${q.quoteNum||'—'}</td>
       <td>${q.day||'—'} ${q.month}</td>
@@ -485,8 +481,7 @@ window.openModal = (q=null) => {
   document.getElementById('f-client').value=q?.clientName||''
   document.getElementById('f-contact').value=q?.clientContact||''
   document.getElementById('f-email').value=q?.clientEmail||''
-  document.getElementById('f-quotedprice').value=q?.quotedPrice||''
-  document.getElementById('f-courier').value=q?.courierCosts||''
+  // quotedPrice and courierCosts now live inside each line item
   document.getElementById('f-notes').value=q?.notes||''
   lineItemCount=0;
   document.getElementById('line-items-container').innerHTML='';
@@ -497,23 +492,25 @@ window.openModal = (q=null) => {
 };
 window.closeModal = () => { document.getElementById('modal-overlay').classList.remove('open'); editingId=null; };
 
-// Global paste handler — pastes image into the LAST focused paste area
+// Global paste handler — always active, pastes into last clicked paste area or first one
 let lastFocusedImgId=null;
 document.addEventListener('paste', e=>{
-  if(!document.getElementById('modal-overlay').classList.contains('open')) return;
-  const items=e.clipboardData?.items;
-  if(!items) return;
-  for(let item of items){
+  const items=e.clipboardData?.items||[];
+  for(let item of Array.from(items)){
     if(item.type.startsWith('image/')){
-      const targetId=lastFocusedImgId||('li-1');
+      e.preventDefault();
+      // Find target: last focused area, or first visible paste area
+      const allAreas=document.querySelectorAll('[id^="img-area-"]');
+      const targetId=lastFocusedImgId||(allAreas.length?allAreas[0].id.replace('img-area-',''):'li-1');
       readImgFile(item.getAsFile(), targetId);
+      showToast('Image pasted into Part '+(targetId.replace('li-','')));
       break;
     }
   }
-});
-document.addEventListener('focusin', e=>{
+}, true);
+document.addEventListener('click', e=>{
   const area=e.target.closest('[id^="img-area-"]');
-  if(area) lastFocusedImgId=area.id.replace('img-area-','');
+  if(area){ lastFocusedImgId=area.id.replace('img-area-',''); area.style.outline='2px solid var(--accent)'; setTimeout(()=>area.style.outline='',2000); }
 });
 
 window.addLineItem = (data={}) => {
@@ -538,7 +535,7 @@ window.addLineItem = (data={}) => {
           ondragleave="this.classList.remove('drag-over')"
           ondrop="handleImgDrop(event,'${id}')">
           ${data.partImage?`<img src="${data.partImage}" id="img-preview-${id}"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`
-            :`<div class="img-paste-text">Click to upload or paste image (Ctrl+V)</div>`}
+            :`<div class="img-paste-text">Click area to select it, then Ctrl+V to paste — or click to upload</div>`}
         </div>
         <input type="file" id="img-file-${id}" accept="image/*" style="display:none" onchange="handleImgFile(event,'${id}')">
       </div>
@@ -554,6 +551,10 @@ window.addLineItem = (data={}) => {
         <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="vat" value="${data.vat||''}" readonly></div></div>
       <div><label class="form-label">Selling Price Incl. VAT</label>
         <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="sellingPriceInc" value="${data.sellingPriceInc||''}" readonly></div></div>
+      <div><label class="form-label">Quoted Price (ZAR)</label>
+        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" data-f="quotedPrice" value="${data.quotedPrice||''}" placeholder="0.00" oninput="calcSummary()"></div></div>
+      <div><label class="form-label">Courier Costs (ZAR)</label>
+        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" data-f="courierCosts" value="${data.courierCosts||''}" placeholder="0.00" oninput="calcSummary()"></div></div>
     </div>`;
   document.getElementById('line-items-container').appendChild(div);
   // Seed raw values from saved data so calcSummary works immediately on edit
@@ -594,19 +595,22 @@ window.calcLineItem = (id) => {
 };
 
 window.calcSummary = () => {
-  let totalEx=0;
+  let totalEx=0, totalQP=0, totalCC=0;
   document.querySelectorAll('.line-item').forEach(el=>{
     totalEx += parseFloat(el.dataset.rawSelEx)||0;
+    const qpField=el.querySelector('[data-f="quotedPrice"]');
+    const ccField=el.querySelector('[data-f="courierCosts"]');
+    totalQP += parseFloat(qpField?.value)||0;
+    totalCC += parseFloat(ccField?.value)||0;
   });
   totalEx=+totalEx.toFixed(4);
   const totalVat=+(totalEx*0.15).toFixed(4);
   const totalInc=+(totalEx+totalVat).toFixed(4);
-  const qp=parseFloat(document.getElementById('f-quotedprice').value)||0;
-  const cc=parseFloat(document.getElementById('f-courier').value)||0;
+  const totalFinal=+(totalQP+totalCC).toFixed(4);
   document.getElementById('f-total-selling-ex').value=fmt(totalEx);
   document.getElementById('f-total-vat').value=fmt(totalVat);
   document.getElementById('f-total-selling-inc').value=fmt(totalInc);
-  document.getElementById('f-final').value=fmt(qp+cc);
+  document.getElementById('f-final').value=fmt(totalFinal);
 };
 
 function getLineItems(){
@@ -618,12 +622,17 @@ function getLineItems(){
     const selEx=parseFloat(el.dataset.rawSelEx)||(priceEx*1.4);
     const arpc=+(priceEx*0.2).toFixed(4);
     const vat=+(selEx*0.15).toFixed(4);
+    const quotedPrice=parseFloat(get('quotedPrice'))||0;
+    const courierCosts=parseFloat(get('courierCosts'))||0;
     items.push({
       make:get('make'), model:get('model'), partDesc:get('partDesc'), partNum:get('partNum'),
       priceEx:+priceEx.toFixed(4),
       arpcMarkup:arpc, arpcDirectMarkup:arpc,
       sellingPriceEx:+selEx.toFixed(4),
       vat:vat, sellingPriceInc:+(selEx+vat).toFixed(4),
+      quotedPrice:+quotedPrice.toFixed(4),
+      courierCosts:+courierCosts.toFixed(4),
+      finalPrice:+(quotedPrice+courierCosts).toFixed(4),
       partImage:imgEl?.src||''
     });
   });
@@ -635,7 +644,7 @@ window.handleImgFile=(e,id)=>{const f=e.target.files[0];if(f)readImgFile(f,id);}
 window.handleImgDrop=(e,id)=>{e.preventDefault();document.getElementById(`img-area-${id}`)?.classList.remove('drag-over');const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))readImgFile(f,id);};
 function readImgFile(file,id){const r=new FileReader();r.onload=ev=>setImgPreview(id,ev.target.result);r.readAsDataURL(file);}
 function setImgPreview(id,src){const a=document.getElementById(`img-area-${id}`);if(!a)return;a.innerHTML=`<img src="${src}" id="img-preview-${id}" style="max-width:100%;max-height:120px;border-radius:4px"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`;}
-window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML='<div class="img-paste-text">Click to upload or paste image (Ctrl+V)</div>';};
+window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML='<div class="img-paste-text">Click area to select it, then Ctrl+V to paste — or click to upload</div>';};
 
 window.saveQuote = async () => {
   const qNum=document.getElementById('f-quotenum').value.trim();
@@ -643,13 +652,17 @@ window.saveQuote = async () => {
   if(!qNum||!client){showToast('Quote number and client name required');return;}
   const lineItems=getLineItems();
   const vehicle=[...new Set(lineItems.map(i=>[i.make,i.model].filter(Boolean).join(' ')).filter(Boolean))].join(', ');
+  const totalQuotedPrice=lineItems.reduce((s,i)=>s+(i.quotedPrice||0),0);
+  const totalCourierCosts=lineItems.reduce((s,i)=>s+(i.courierCosts||0),0);
+  const totalFinalPrice=+(totalQuotedPrice+totalCourierCosts).toFixed(4);
   const data={
     quoteNum:qNum, day:parseInt(document.getElementById('f-day').value)||null,
     month:document.getElementById('f-month').value, status:document.getElementById('f-status').value,
     clientName:client, clientContact:document.getElementById('f-contact').value,
     clientEmail:document.getElementById('f-email').value,
-    quotedPrice:parseFloat(document.getElementById('f-quotedprice').value)||0,
-    courierCosts:parseFloat(document.getElementById('f-courier').value)||0,
+    quotedPrice:+totalQuotedPrice.toFixed(4),
+    courierCosts:+totalCourierCosts.toFixed(4),
+    finalPrice:totalFinalPrice,
     notes:document.getElementById('f-notes').value,
     vehicle, lineItems, uid:currentUser.uid,
     userName:currentUser.displayName||currentUser.email, updatedAt:Date.now()
@@ -686,6 +699,8 @@ window.generatePDF = (id) => {
       <td style="font-family:monospace">${p.partNum||'—'}</td>
       <td>${p.partImage?`<img src="${p.partImage}" class="pdf-part-img" alt="Part">`:'-'}</td>
       <td style="text-align:right">R ${fmt(p.priceEx||0)}</td>
+      <td style="text-align:right">R ${fmt(p.quotedPrice||0)}</td>
+      <td style="text-align:right">R ${fmt(p.courierCosts||0)}</td>
     </tr>`).join('');
   const date=new Date();
   const validity=new Date(date.getTime()+30*24*60*60*1000);
@@ -712,15 +727,15 @@ window.generatePDF = (id) => {
       <div class="pdf-section">
         <div class="pdf-section-title">Parts</div>
         <table class="pdf-parts-table">
-          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th><th>Part Number</th><th>Image</th><th style="text-align:right">Price Excl. VAT</th></tr></thead>
+          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th><th>Part Number</th><th>Image</th><th style="text-align:right">Price Excl. VAT</th><th style="text-align:right">Quoted Price</th><th style="text-align:right">Courier</th></tr></thead>
           <tbody>${partsRows}</tbody>
         </table>
       </div>
       <div class="pdf-section" style="max-width:340px;margin-left:auto">
         <div class="pdf-pricing">
-          <div class="pdf-pricing-row"><span>Quoted Price</span><span>R ${fmt(q.quotedPrice||0)}</span></div>
-          <div class="pdf-pricing-row"><span>Courier Costs</span><span>R ${fmt(q.courierCosts||0)}</span></div>
-          <div class="pdf-pricing-row pdf-pricing-total"><span>FINAL PRICE</span><span>R ${fmt(finalPrice)}</span></div>
+          <div class="pdf-pricing-row"><span>Total Quoted Price</span><span>R ${fmt(q.quotedPrice||0)}</span></div>
+          <div class="pdf-pricing-row"><span>Total Courier Costs</span><span>R ${fmt(q.courierCosts||0)}</span></div>
+          <div class="pdf-pricing-row pdf-pricing-total"><span>TOTAL FINAL PRICE</span><span>R ${fmt(finalPrice)}</span></div>
         </div>
       </div>
       ${q.notes?`
