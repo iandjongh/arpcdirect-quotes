@@ -86,6 +86,10 @@
   .status-Won { background: var(--green-bg); color: var(--green); }
   .status-Lost { background: var(--red-bg); color: var(--red); }
   .status-Cancelled { background: var(--gray-bg); color: var(--gray); }
+  .status-select.status-Pending { background: var(--amber-bg); color: var(--amber); }
+  .status-select.status-Won { background: var(--green-bg); color: var(--green); }
+  .status-select.status-Lost { background: var(--red-bg); color: var(--red); }
+  .status-select.status-Cancelled { background: var(--gray-bg); color: var(--gray); }
 
   .action-btn { padding: 4px 8px; border-radius: 4px; border: none; background: transparent; cursor: pointer; font-size: 12px; color: var(--text3); transition: all 0.15s; }
   .action-btn:hover { background: var(--surface2); color: var(--text); }
@@ -344,13 +348,12 @@ import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, updateDoc } 
 // Replace these with your Firebase project config:
 // console.firebase.google.com → Project Settings → Your apps → Web app
 const firebaseConfig = {
-  apiKey: "AIzaSyB_7KrAPPHrYjfJ9Em93F2X-_GIxB-JBCo",
-  authDomain: "arpcdirect-quotes.firebaseapp.com",
-  projectId: "arpcdirect-quotes",
-  storageBucket: "arpcdirect-quotes.firebasestorage.app",
-  messagingSenderId: "240729543062",
-  appId: "1:240729543062:web:e15188ea1481889f6fcdb7",
-  measurementId: "G-YGY9V2RBF4"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -446,7 +449,14 @@ function renderQuotes(){
       <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${partNames}">${partNames||'—'}</td>
       <td class="mono">R ${fmt(q.quotedPrice||0)}</td>
       <td class="mono"><strong>R ${fmt(finalPrice)}</strong></td>
-      <td><span class="status-badge status-${q.status}">${q.status}</span></td>
+      <td>
+        <select class="status-select status-${q.status}" onchange="changeStatus('${q.id}',this.value,this)" style="border:none;border-radius:20px;padding:3px 8px;font-size:11px;font-weight:500;cursor:pointer;outline:none;appearance:auto">
+          <option value="Pending" ${q.status==='Pending'?'selected':''}>Pending</option>
+          <option value="Won" ${q.status==='Won'?'selected':''}>Won</option>
+          <option value="Lost" ${q.status==='Lost'?'selected':''}>Lost</option>
+          <option value="Cancelled" ${q.status==='Cancelled'?'selected':''}>Cancelled</option>
+        </select>
+      </td>
       <td>
         <button class="action-btn pdf" onclick='generatePDF("${q.id}")' title="Generate PDF">PDF</button>
         <button class="action-btn" onclick='editQuote("${q.id}")'>Edit</button>
@@ -543,11 +553,17 @@ window.calcLineItem = (id) => {
   const vat=selEx*0.15, selInc=selEx+vat;
   get('arpcMarkup').value=fmt(arpc); get('arpcDirectMarkup').value=fmt(arpcD);
   get('sellingPriceEx').value=fmt(selEx); get('vat').value=fmt(vat); get('sellingPriceInc').value=fmt(selInc);
+  // Store raw numeric value for accurate summing across multiple items
+  el.dataset.sellingPriceExRaw = selEx;
+  el.dataset.priceExRaw = priceEx;
 };
 
 window.calcSummary = () => {
-  const items=getLineItems();
-  const totalEx=items.reduce((s,i)=>s+(parseFloat(i.sellingPriceEx)||0),0);
+  // Use raw dataset values to avoid parseFloat failing on formatted strings like "1,234.00"
+  let totalEx=0;
+  document.querySelectorAll('.line-item').forEach(el=>{
+    totalEx += parseFloat(el.dataset.sellingPriceExRaw)||0;
+  });
   const totalVat=totalEx*0.15, totalInc=totalEx+totalVat;
   const qp=parseFloat(document.getElementById('f-quotedprice').value)||0;
   const cc=parseFloat(document.getElementById('f-courier').value)||0;
@@ -562,9 +578,12 @@ function getLineItems(){
   document.querySelectorAll('.line-item').forEach(el=>{
     const get=f=>el.querySelector(`[data-f="${f}"]`)?.value||'';
     const imgEl=el.querySelector(`[id^="img-preview-"]`);
+    // Store raw numeric values so dashboard/quotes tab calculations are accurate
+    const priceEx=parseFloat(el.dataset.priceExRaw)||parseFloat(get('priceEx'))||0;
+    const selEx=parseFloat(el.dataset.sellingPriceExRaw)||(priceEx*1.4);
     items.push({ make:get('make'),model:get('model'),partDesc:get('partDesc'),partNum:get('partNum'),
-      priceEx:get('priceEx'),arpcMarkup:get('arpcMarkup'),arpcDirectMarkup:get('arpcDirectMarkup'),
-      sellingPriceEx:get('sellingPriceEx'),vat:get('vat'),sellingPriceInc:get('sellingPriceInc'),
+      priceEx:priceEx, arpcMarkup:priceEx*0.2, arpcDirectMarkup:priceEx*0.2,
+      sellingPriceEx:selEx, vat:selEx*0.15, sellingPriceInc:selEx*1.15,
       partImage:imgEl?.src||'' });
   });
   return items;
@@ -701,13 +720,27 @@ function renderDashboard(){
     return `<div class="user-row"><div style="display:flex;align-items:center;gap:8px"><div class="avatar">${initials}</div><span style="font-size:13px">${name}</span></div><div style="text-align:right"><span style="font-size:13px;font-weight:500">${d.count}</span><br><span class="mono" style="font-size:11px;color:var(--text3)">R ${fmt(d.value)}</span></div></div>`;
   }).join('')||'<div style="color:var(--text3);font-size:13px">No data</div>';
   const monthlyData={}; MONTHS.forEach(m=>monthlyData[m]=0);
-  allQ.forEach(q=>{ if(q.month){const items=q.lineItems||[];monthlyData[q.month]=(monthlyData[q.month]||0)+items.reduce((s,i)=>s+(parseFloat(i.sellingPriceEx)||0),0);}});
+  allQ.forEach(q=>{ if(q.month){const items=q.lineItems||[];monthlyData[q.month]=(monthlyData[q.month]||0)+items.reduce((s,i)=>s+(parseFloat(String(i.sellingPriceEx).replace(/,/g,''))||0),0);}});
   const maxVal=Math.max(...Object.values(monthlyData),1);
   document.getElementById('monthly-chart').innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'+MONTHS.map(m=>{
     const val=monthlyData[m], pct=Math.round((val/maxVal)*100);
     return `<div class="bar-item"><span class="bar-label">${m.substring(0,3)}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><span class="bar-val">R ${fmtK(val)}</span></div>`;
   }).join('')+'</div>';
 }
+
+// FIX 3: Change status inline without opening the edit modal
+window.changeStatus = async (id, newStatus, selectEl) => {
+  // Update colour immediately
+  selectEl.className='status-select status-'+newStatus;
+  try {
+    await updateDoc(doc(db,'quotes',id),{status:newStatus,updatedAt:Date.now()});
+    const idx=allQuotes.findIndex(q=>q.id===id);
+    if(idx>-1) allQuotes[idx].status=newStatus;
+    showToast('Status updated to '+newStatus);
+  } catch(e){
+    showToast('Error updating status: '+e.message);
+  }
+};
 
 function fmt(n){return (parseFloat(n)||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
 function fmtK(n){n=parseFloat(n)||0;if(n>=1000000)return (n/1000000).toFixed(1)+'M';if(n>=1000)return (n/1000).toFixed(1)+'K';return n.toFixed(0);}
