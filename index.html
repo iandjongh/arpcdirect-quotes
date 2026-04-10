@@ -496,105 +496,54 @@ window.openModal = (q=null) => {
 };
 window.closeModal = () => { document.getElementById('modal-overlay').classList.remove('open'); editingId=null; };
 
-// Image paste system using hidden textarea for reliable cross-browser paste capture
-let activePasteId=null;
-// Create a hidden textarea that we focus to capture paste events
-const pasteCapture=document.createElement('textarea');
-pasteCapture.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;';
-document.body.appendChild(pasteCapture);
-pasteCapture.addEventListener('paste', e=>{
-  const clipItems=Array.from(e.clipboardData?.items||[]);
-  for(let item of clipItems){
-    if(item.type.startsWith('image/')){
-      e.preventDefault();
-      const targetId=activePasteId||'li-1';
-      readImgFile(item.getAsFile(), targetId);
-      showToast('Image pasted successfully!');
-      const btn=document.getElementById('paste-btn-'+targetId);
-      if(btn){btn.style.background='var(--green-bg)';btn.style.color='var(--green)';btn.textContent='Image pasted! Click to paste another';}
-      setTimeout(()=>{
-        if(btn){btn.style.background='var(--accent-light)';btn.style.color='var(--accent)';btn.textContent='Paste image (Ctrl+V)';}
-        activePasteId=null;
-      },3000);
-      break;
+// IMAGE PASTE via Clipboard API
+window.activatePaste = async (id) => {
+  const btn = document.getElementById('paste-btn-' + id);
+  if (navigator.clipboard && navigator.clipboard.read) {
+    try {
+      if(btn) btn.textContent = 'Reading clipboard...';
+      const clipboardItems = await navigator.clipboard.read();
+      let found = false;
+      for (const clipItem of clipboardItems) {
+        for (const type of clipItem.types) {
+          if (type.startsWith('image/')) {
+            const blob = await clipItem.getType(type);
+            readImgFile(blob, id);
+            showToast('Image pasted successfully!');
+            found = true;
+            if(btn){
+              btn.style.background='var(--green-bg)';
+              btn.style.color='var(--green)';
+              btn.textContent='Pasted! Click again to replace';
+              setTimeout(()=>{
+                btn.style.background='var(--accent-light)';
+                btn.style.color='var(--accent)';
+                btn.textContent='Paste from clipboard';
+              }, 3000);
+            }
+            break;
+          }
+        }
+        if(found) break;
+      }
+      if(!found){
+        showToast('No image found in clipboard. Copy an image first, then click this button.');
+        if(btn) btn.textContent='Paste from clipboard';
+      }
+    } catch(err) {
+      if(btn) btn.textContent='Paste from clipboard';
+      if(err.name==='NotAllowedError'){
+        showToast('Allow clipboard access when your browser asks, then try again.');
+      } else {
+        showToast('Could not read clipboard. Using file upload instead.');
+        document.getElementById('img-file-'+id)?.click();
+      }
     }
+  } else {
+    showToast('Clipboard paste not supported. Using file upload.');
+    document.getElementById('img-file-'+id)?.click();
+    if(btn) btn.textContent='Paste from clipboard';
   }
-  // Clear the textarea content after paste
-  setTimeout(()=>{pasteCapture.value='';},100);
-});
-window.activatePaste=(id)=>{
-  activePasteId=id;
-  // Reset all paste buttons
-  document.querySelectorAll('[id^="paste-btn-"]').forEach(b=>{
-    b.style.background='var(--accent-light)';b.style.color='var(--accent)';b.textContent='Paste image (Ctrl+V)';
-  });
-  // Highlight active one
-  const btn=document.getElementById('paste-btn-'+id);
-  if(btn){btn.style.background='var(--accent)';btn.style.color='#fff';btn.textContent='Ready! Now press Ctrl+V';}
-  // Focus the hidden textarea so it captures the paste
-  pasteCapture.focus();
-  showToast('Ready — now press Ctrl+V to paste your image');
-};
-
-window.addLineItem = (data={}) => {
-  lineItemCount++;
-  const id=`li-${lineItemCount}`;
-  const div=document.createElement('div');
-  div.className='line-item'; div.id=id;
-  div.innerHTML=`
-    <div class="line-item-header">
-      <span class="line-item-num">Part ${lineItemCount}</span>
-      <button class="btn-remove" onclick="removeLineItem('${id}');calcSummary()">Remove</button>
-    </div>
-    <div class="form-grid">
-      ${lineItemCount===1?`
-      <div><label class="form-label">Vehicle Make</label><input class="form-input" data-f="make" value="${data.make||''}" placeholder="e.g. Toyota"></div>
-      <div><label class="form-label">Vehicle Model</label><input class="form-input" data-f="model" value="${data.model||''}" placeholder="e.g. Hilux"></div>`
-      :`<input type="hidden" data-f="make" value="${data.make||''}"><input type="hidden" data-f="model" value="${data.model||''}">`}
-      <div><label class="form-label">Part Description</label><input class="form-input" data-f="partDesc" value="${data.partDesc||''}" placeholder="Describe the part"></div>
-      <div><label class="form-label">Part Number</label><input class="form-input mono" data-f="partNum" value="${data.partNum||''}" placeholder="OEM / Part #"></div>
-      <div class="full">
-        <label class="form-label">Part Image (paste or click to upload)</label>
-        <div class="img-paste-area" id="img-area-${id}"
-          ondragover="event.preventDefault();this.classList.add('drag-over')"
-          ondragleave="this.classList.remove('drag-over')"
-          ondrop="handleImgDrop(event,'${id}')">
-          ${data.partImage?`<img src="${data.partImage}" id="img-preview-${id}" style="max-width:100%;max-height:120px;border-radius:4px"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`
-            :`<div class="img-paste-text" id="img-text-${id}">No image</div>`}
-        </div>
-        <div style="display:flex;gap:6px;margin-top:6px">
-          <button type="button" onclick="triggerImgUpload('${id}')" style="flex:1;padding:5px 8px;border:1px solid var(--border2);border-radius:4px;font-size:11px;cursor:pointer;background:var(--surface);font-family:inherit">Upload image</button>
-          <button type="button" onclick="activatePaste('${id}')" id="paste-btn-${id}" style="flex:1;padding:5px 8px;border:1px solid var(--accent);border-radius:4px;font-size:11px;cursor:pointer;background:var(--accent-light);color:var(--accent);font-family:inherit">Paste image (Ctrl+V)</button>
-        </div>
-        <input type="file" id="img-file-${id}" accept="image/*" style="display:none" onchange="handleImgFile(event,'${id}')">
-      </div>
-      <div><label class="form-label">Price Excl. VAT (ZAR)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" data-f="priceEx" value="${data.priceEx||''}" placeholder="0.00" oninput="calcLineItem('${id}');calcSummary()"></div></div>
-      <div><label class="form-label">ARPC Markup (20%)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="arpcMarkup" value="${data.arpcMarkup||''}" readonly></div></div>
-      <div><label class="form-label">ARPCDirect Markup (20%)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="arpcDirectMarkup" value="${data.arpcDirectMarkup||''}" readonly></div></div>
-      <div><label class="form-label">Selling Price Excl. VAT</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="sellingPriceEx" value="${data.sellingPriceEx||''}" readonly></div></div>
-      <div><label class="form-label">VAT (15%)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="vat" value="${data.vat||''}" readonly></div></div>
-      <div><label class="form-label">Selling Price Incl. VAT</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" data-f="sellingPriceInc" value="${data.sellingPriceInc||''}" readonly></div></div>
-      <div><label class="form-label">Quoted Price (ZAR)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" data-f="quotedPrice" value="${data.quotedPrice||''}" placeholder="0.00" oninput="calcSummary()"></div></div>
-      <div><label class="form-label">Courier Costs (ZAR)</label>
-        <div class="currency-wrap"><span class="prefix">R</span><input class="form-input" type="number" data-f="courierCosts" value="${data.courierCosts||''}" placeholder="0.00" oninput="calcSummary()"></div></div>
-    </div>`;
-  document.getElementById('line-items-container').appendChild(div);
-  // Seed raw values from saved data so calcSummary works immediately on edit
-  if(data.priceEx){
-    const priceEx=parseFloat(data.priceEx)||0;
-    const selEx=parseFloat(data.sellingPriceEx)||(priceEx*1.4);
-    div.dataset.rawPriceEx=priceEx;
-    div.dataset.rawSelEx=selEx;
-    calcLineItem(id);
-  }
-  // Paste handled globally via activatePaste()
 };
 window.removeLineItem = (id) => { const el=document.getElementById(id); if(el)el.remove(); };
 
@@ -677,7 +626,7 @@ window.handleImgFile=(e,id)=>{const f=e.target.files[0];if(f)readImgFile(f,id);}
 window.handleImgDrop=(e,id)=>{e.preventDefault();document.getElementById(`img-area-${id}`)?.classList.remove('drag-over');const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))readImgFile(f,id);};
 function readImgFile(file,id){const r=new FileReader();r.onload=ev=>setImgPreview(id,ev.target.result);r.readAsDataURL(file);}
 function setImgPreview(id,src){const a=document.getElementById(`img-area-${id}`);if(!a)return;a.innerHTML=`<img src="${src}" id="img-preview-${id}" style="max-width:100%;max-height:120px;border-radius:4px"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`;}
-window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML=`<div class="img-paste-text" id="img-text-${id}">No image</div>`;};
+window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML=`<div class="img-paste-text" id="img-text-${id}" style=\"color:var(--text3);font-size:12px\">No image — use buttons below</div>`;};
 
 window.saveQuote = async () => {
   const qNum=document.getElementById('f-quotenum').value.trim();
