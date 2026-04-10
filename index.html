@@ -244,8 +244,8 @@
       <table>
         <thead>
           <tr>
-            <th>Quote #</th><th>Date</th><th>Client</th><th>Vehicle</th><th>Parts</th>
-            <th>Quoted Price</th><th>Final Price</th><th>Status</th><th>Actions</th>
+            <th>Quote #</th><th>Date</th><th>Client</th><th>Vehicle</th>
+            <th>Selling Price Incl. VAT</th><th>Final Price</th><th>Potential Profit</th><th>Status</th><th>Actions</th>
           </tr>
         </thead>
         <tbody id="quotes-tbody"></tbody>
@@ -316,6 +316,8 @@
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-total-selling-inc" readonly></div></div>
           <div><label class="form-label">Total Final Price (All parts)</label>
             <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-final" readonly></div></div>
+          <div><label class="form-label">Potential Profit</label>
+            <div class="currency-wrap"><span class="prefix">R</span><input class="form-input calc" id="f-potential-profit" readonly style="color:var(--green)"></div></div>
         </div>
       </div>
       <div class="form-section">
@@ -436,16 +438,18 @@ function renderQuotes(){
   }
   tbody.innerHTML=quotes.sort((a,b)=>(a.day||0)-(b.day||0)).map(q=>{
     const items=q.lineItems||[];
-    const partNames=items.map(i=>i.partDesc||'—').join(', ');
     const finalPrice=parseFloat(q.finalPrice)||((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0));
+    const totalSellingInc=items.reduce((s,i)=>s+(parseFloat(i.sellingPriceInc)||0),0);
+    const totalARPC=items.reduce((s,i)=>s+(parseFloat(i.arpcMarkup)||0)+(parseFloat(i.arpcDirectMarkup)||0),0);
+    const potentialProfit=+(finalPrice - totalSellingInc + totalARPC).toFixed(2);
     return `<tr>
       <td class="mono">${q.quoteNum||'—'}</td>
       <td>${q.day||'—'} ${q.month}</td>
       <td><strong>${q.clientName||'—'}</strong><br><span style="font-size:11px;color:var(--text3)">${q.clientEmail||''}</span></td>
       <td>${q.vehicle||'—'}</td>
-      <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${partNames}">${partNames||'—'}</td>
-      <td class="mono">R ${fmt(q.quotedPrice||0)}</td>
+      <td class="mono">R ${fmt(totalSellingInc)}</td>
       <td class="mono"><strong>R ${fmt(finalPrice)}</strong></td>
+      <td class="mono" style="color:var(--green);font-weight:500">R ${fmt(potentialProfit)}</td>
       <td>
         <select class="status-select status-${q.status}" onchange="changeStatus('${q.id}',this.value,this)" style="border:none;border-radius:20px;padding:3px 8px;font-size:11px;font-weight:500;cursor:pointer;outline:none;appearance:auto">
           <option value="Pending" ${q.status==='Pending'?'selected':''}>Pending</option>
@@ -492,26 +496,35 @@ window.openModal = (q=null) => {
 };
 window.closeModal = () => { document.getElementById('modal-overlay').classList.remove('open'); editingId=null; };
 
-// Global paste handler — always active, pastes into last clicked paste area or first one
-let lastFocusedImgId=null;
+// Paste system: user clicks "Click then Ctrl+V" button to activate a part slot
+let activePasteId=null;
+window.activatePaste=(id)=>{
+  activePasteId=id;
+  // Reset all paste buttons
+  document.querySelectorAll('[id^="paste-btn-"]').forEach(b=>{
+    b.style.background='var(--accent-light)';b.style.color='var(--accent)';b.textContent='Click then Ctrl+V to paste';
+  });
+  // Highlight active one
+  const btn=document.getElementById('paste-btn-'+id);
+  if(btn){btn.style.background='var(--accent)';btn.style.color='#fff';btn.textContent='Ready — press Ctrl+V now!';}
+  showToast('Part '+id.replace('li','')+' ready — press Ctrl+V to paste image');
+};
 document.addEventListener('paste', e=>{
-  const items=e.clipboardData?.items||[];
-  for(let item of Array.from(items)){
+  const clipItems=e.clipboardData?.items||[];
+  for(let item of Array.from(clipItems)){
     if(item.type.startsWith('image/')){
       e.preventDefault();
-      // Find target: last focused area, or first visible paste area
-      const allAreas=document.querySelectorAll('[id^="img-area-"]');
-      const targetId=lastFocusedImgId||(allAreas.length?allAreas[0].id.replace('img-area-',''):'li-1');
+      const targetId=activePasteId||(document.querySelector('[id^="img-area-"]')?.id.replace('img-area-',''))||'li-1';
       readImgFile(item.getAsFile(), targetId);
-      showToast('Image pasted into Part '+(targetId.replace('li-','')));
+      showToast('Image pasted!');
+      // Reset button
+      const btn=document.getElementById('paste-btn-'+targetId);
+      if(btn){btn.style.background='var(--accent-light)';btn.style.color='var(--accent)';btn.textContent='Click then Ctrl+V to paste';}
+      activePasteId=null;
       break;
     }
   }
 }, true);
-document.addEventListener('click', e=>{
-  const area=e.target.closest('[id^="img-area-"]');
-  if(area){ lastFocusedImgId=area.id.replace('img-area-',''); area.style.outline='2px solid var(--accent)'; setTimeout(()=>area.style.outline='',2000); }
-});
 
 window.addLineItem = (data={}) => {
   lineItemCount++;
@@ -524,18 +537,24 @@ window.addLineItem = (data={}) => {
       <button class="btn-remove" onclick="removeLineItem('${id}');calcSummary()">Remove</button>
     </div>
     <div class="form-grid">
+      ${lineItemCount===1?`
       <div><label class="form-label">Vehicle Make</label><input class="form-input" data-f="make" value="${data.make||''}" placeholder="e.g. Toyota"></div>
-      <div><label class="form-label">Vehicle Model</label><input class="form-input" data-f="model" value="${data.model||''}" placeholder="e.g. Hilux"></div>
+      <div><label class="form-label">Vehicle Model</label><input class="form-input" data-f="model" value="${data.model||''}" placeholder="e.g. Hilux"></div>`
+      :`<input type="hidden" data-f="make" value="${data.make||''}"><input type="hidden" data-f="model" value="${data.model||''}">`}
       <div><label class="form-label">Part Description</label><input class="form-input" data-f="partDesc" value="${data.partDesc||''}" placeholder="Describe the part"></div>
       <div><label class="form-label">Part Number</label><input class="form-input mono" data-f="partNum" value="${data.partNum||''}" placeholder="OEM / Part #"></div>
       <div class="full">
         <label class="form-label">Part Image (paste or click to upload)</label>
-        <div class="img-paste-area" id="img-area-${id}" onclick="triggerImgUpload('${id}')"
+        <div class="img-paste-area" id="img-area-${id}"
           ondragover="event.preventDefault();this.classList.add('drag-over')"
           ondragleave="this.classList.remove('drag-over')"
           ondrop="handleImgDrop(event,'${id}')">
-          ${data.partImage?`<img src="${data.partImage}" id="img-preview-${id}"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`
-            :`<div class="img-paste-text">Click area to select it, then Ctrl+V to paste — or click to upload</div>`}
+          ${data.partImage?`<img src="${data.partImage}" id="img-preview-${id}" style="max-width:100%;max-height:120px;border-radius:4px"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`
+            :`<div class="img-paste-text" id="img-text-${id}">No image</div>`}
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button type="button" onclick="triggerImgUpload('${id}')" style="flex:1;padding:5px 8px;border:1px solid var(--border2);border-radius:4px;font-size:11px;cursor:pointer;background:var(--surface);font-family:inherit">Upload image</button>
+          <button type="button" onclick="activatePaste('${id}')" id="paste-btn-${id}" style="flex:1;padding:5px 8px;border:1px solid var(--accent);border-radius:4px;font-size:11px;cursor:pointer;background:var(--accent-light);color:var(--accent);font-family:inherit">Click then Ctrl+V to paste</button>
         </div>
         <input type="file" id="img-file-${id}" accept="image/*" style="display:none" onchange="handleImgFile(event,'${id}')">
       </div>
@@ -565,14 +584,7 @@ window.addLineItem = (data={}) => {
     div.dataset.rawSelEx=selEx;
     calcLineItem(id);
   }
-  div.addEventListener('paste',e=>{
-    const items=e.clipboardData?.items;
-    if(!items)return;
-    for(let item of items){ if(item.type.startsWith('image/')){ readImgFile(item.getAsFile(),id); break; } }
-  });
-  // Also make the paste area focusable so Ctrl+V works when clicked
-  const pasteArea=document.getElementById(`img-area-${id}`);
-  if(pasteArea){ pasteArea.setAttribute('tabindex','0'); pasteArea.title='Click here first, then press Ctrl+V to paste image'; }
+  // Paste handled globally via activatePaste()
 };
 window.removeLineItem = (id) => { const el=document.getElementById(id); if(el)el.remove(); };
 
@@ -611,6 +623,17 @@ window.calcSummary = () => {
   document.getElementById('f-total-vat').value=fmt(totalVat);
   document.getElementById('f-total-selling-inc').value=fmt(totalInc);
   document.getElementById('f-final').value=fmt(totalFinal);
+  // Potential profit: (Final - SellingInc) + ARPC + ARPCDirect markups
+  let totalARPC=0, totalSelInc=0;
+  document.querySelectorAll('.line-item').forEach(el=>{
+    const getV=f=>parseFloat(el.querySelector(`[data-f="${f}"]`)?.value)||0;
+    totalARPC += getV('arpcMarkup') + getV('arpcDirectMarkup');
+    totalSelInc += parseFloat(el.dataset.rawSelEx)||0;
+  });
+  const totalSelIncWithVat=+(totalSelInc*1.15).toFixed(4);
+  const potProfit=+(totalFinal - totalSelIncWithVat + totalARPC).toFixed(2);
+  const ppEl=document.getElementById('f-potential-profit');
+  if(ppEl) ppEl.value=fmt(potProfit);
 };
 
 function getLineItems(){
@@ -644,7 +667,7 @@ window.handleImgFile=(e,id)=>{const f=e.target.files[0];if(f)readImgFile(f,id);}
 window.handleImgDrop=(e,id)=>{e.preventDefault();document.getElementById(`img-area-${id}`)?.classList.remove('drag-over');const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))readImgFile(f,id);};
 function readImgFile(file,id){const r=new FileReader();r.onload=ev=>setImgPreview(id,ev.target.result);r.readAsDataURL(file);}
 function setImgPreview(id,src){const a=document.getElementById(`img-area-${id}`);if(!a)return;a.innerHTML=`<img src="${src}" id="img-preview-${id}" style="max-width:100%;max-height:120px;border-radius:4px"><button class="img-clear" onclick="event.stopPropagation();clearImg('${id}')">X</button>`;}
-window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML='<div class="img-paste-text">Click area to select it, then Ctrl+V to paste — or click to upload</div>';};
+window.clearImg=(id)=>{const a=document.getElementById(`img-area-${id}`);if(a)a.innerHTML=`<div class="img-paste-text" id="img-text-${id}">No image</div>`;};
 
 window.saveQuote = async () => {
   const qNum=document.getElementById('f-quotenum').value.trim();
@@ -664,6 +687,7 @@ window.saveQuote = async () => {
     courierCosts:+totalCourierCosts.toFixed(4),
     finalPrice:totalFinalPrice,
     notes:document.getElementById('f-notes').value,
+    potentialProfit:parseFloat(document.getElementById('f-potential-profit')?.value?.replace(/,/g,'')||0)||0,
     vehicle, lineItems, uid:currentUser.uid,
     userName:currentUser.displayName||currentUser.email, updatedAt:Date.now()
   };
@@ -698,7 +722,6 @@ window.generatePDF = (id) => {
       <td>${p.partDesc||'—'}</td>
       <td style="font-family:monospace">${p.partNum||'—'}</td>
       <td>${p.partImage?`<img src="${p.partImage}" class="pdf-part-img" alt="Part">`:'-'}</td>
-      <td style="text-align:right">R ${fmt(p.priceEx||0)}</td>
       <td style="text-align:right">R ${fmt(p.quotedPrice||0)}</td>
       <td style="text-align:right">R ${fmt(p.courierCosts||0)}</td>
     </tr>`).join('');
@@ -727,7 +750,7 @@ window.generatePDF = (id) => {
       <div class="pdf-section">
         <div class="pdf-section-title">Parts</div>
         <table class="pdf-parts-table">
-          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th><th>Part Number</th><th>Image</th><th style="text-align:right">Price Excl. VAT</th><th style="text-align:right">Quoted Price</th><th style="text-align:right">Courier</th></tr></thead>
+          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th><th>Part Number</th><th>Image</th><th style="text-align:right">Quoted Price</th><th style="text-align:right">Courier</th></tr></thead>
           <tbody>${partsRows}</tbody>
         </table>
       </div>
@@ -735,7 +758,7 @@ window.generatePDF = (id) => {
         <div class="pdf-pricing">
           <div class="pdf-pricing-row"><span>Total Quoted Price</span><span>R ${fmt(q.quotedPrice||0)}</span></div>
           <div class="pdf-pricing-row"><span>Total Courier Costs</span><span>R ${fmt(q.courierCosts||0)}</span></div>
-          <div class="pdf-pricing-row pdf-pricing-total"><span>TOTAL FINAL PRICE</span><span>R ${fmt(finalPrice)}</span></div>
+          <div class="pdf-pricing-row pdf-pricing-total"><span>TOTAL FINAL PRICE INCL. VAT</span><span>R ${fmt(finalPrice)}</span></div>
         </div>
       </div>
       ${q.notes?`
@@ -744,7 +767,18 @@ window.generatePDF = (id) => {
         <div class="pdf-notes">${q.notes}</div>
       </div>`:''}
       <div class="pdf-validity">This quotation is valid for 30 days from the date of issue (until ${validity.toLocaleDateString('en-ZA',{day:'numeric',month:'long',year:'numeric'})}).</div>
-      <div class="pdf-footer">ARPCDirect — Auto Replacement Parts Centre Direct &nbsp;|&nbsp; This is a computer-generated document.</div>
+      <div style="margin-top:24px;padding:16px 20px;background:#f5f4f0;border-radius:8px;border-left:4px solid #e85d04">
+        <div style="font-size:11px;font-weight:700;color:#1d2d5e;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">About ARPCDirect</div>
+        <div style="font-size:11px;color:#5c5851;line-height:1.7">
+          ARPCDirect is a division of ARPC (Automotive Replacement Parts Centre).<br>
+          Supplying premium automotive parts for over 14 years — and now directly to you!<br>
+          <strong>Web:</strong> www.arpcdirect.co.za &nbsp;|&nbsp;
+          <strong>Email:</strong> sales@arpcdirect.co.za &nbsp;|&nbsp;
+          <strong>Cell / WhatsApp:</strong> 060 593 8466<br>
+          <strong>Address:</strong> 72 Harvey Road, Oranjesig, Bloemfontein, 9301
+        </div>
+      </div>
+      <div class="pdf-footer" style="margin-top:12px">This is a computer-generated quotation document.</div>
     </div>`;
   document.getElementById('pdf-container').innerHTML=pdfHtml;
   showToast('Opening PDF...');
@@ -758,11 +792,14 @@ function renderDashboard(){
   const winRate=total?Math.round((won/total)*100):0;
   const totalValue=allQ.reduce((s,q)=>s+((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0)),0);
   const wonValue=allQ.filter(q=>q.status==='Won').reduce((s,q)=>s+((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0)),0);
+  const totalPotProfit=allQ.reduce((s,q)=>s+(parseFloat(q.potentialProfit)||0),0);
+  const wonPotProfit=allQ.filter(q=>q.status==='Won').reduce((s,q)=>s+(parseFloat(q.potentialProfit)||0),0);
   document.getElementById('stats-grid').innerHTML=`
     <div class="stat-card"><div class="stat-label">Total Quotes</div><div class="stat-value accent">${total}</div><div class="stat-sub">All users, all months</div></div>
     <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value green">${winRate}%</div><div class="stat-sub">${won} won of ${total}</div></div>
-    <div class="stat-card"><div class="stat-label">Total Pipeline</div><div class="stat-value">R ${fmtK(totalValue)}</div><div class="stat-sub">All quotes final price</div></div>
-    <div class="stat-card"><div class="stat-label">Won Revenue</div><div class="stat-value green">R ${fmtK(wonValue)}</div><div class="stat-sub">Final price of won quotes</div></div>`;
+    <div class="stat-card"><div class="stat-label">Won Quotes</div><div class="stat-value green">${won}</div><div class="stat-sub">R ${fmtK(wonValue)} total final price</div></div>
+    <div class="stat-card"><div class="stat-label">Total Potential Profit</div><div class="stat-value accent">R ${fmtK(totalPotProfit)}</div><div class="stat-sub">All quotes</div></div>
+    <div class="stat-card"><div class="stat-label">Won Potential Profit</div><div class="stat-value green">R ${fmtK(wonPotProfit)}</div><div class="stat-sub">Won quotes only</div></div>`;
   const statuses=['Pending','Won','Lost','Cancelled'];
   document.getElementById('status-chart').innerHTML=statuses.map(s=>{
     const count=allQ.filter(q=>q.status===s).length;
