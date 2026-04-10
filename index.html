@@ -441,7 +441,7 @@ function renderQuotes(){
     const finalPrice=parseFloat(q.finalPrice)||((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0));
     const totalSellingInc=items.reduce((s,i)=>s+(parseFloat(i.sellingPriceInc)||0),0);
     const totalARPC=items.reduce((s,i)=>s+(parseFloat(i.arpcMarkup)||0)+(parseFloat(i.arpcDirectMarkup)||0),0);
-    const potentialProfit=+(finalPrice - totalSellingInc + totalARPC).toFixed(2);
+    const potentialProfit=Math.max(0,+(finalPrice - totalSellingInc + totalARPC).toFixed(2));
     return `<tr>
       <td class="mono">${q.quoteNum||'—'}</td>
       <td>${q.day||'—'} ${q.month}</td>
@@ -496,35 +496,45 @@ window.openModal = (q=null) => {
 };
 window.closeModal = () => { document.getElementById('modal-overlay').classList.remove('open'); editingId=null; };
 
-// Paste system: user clicks "Click then Ctrl+V" button to activate a part slot
+// Image paste system using hidden textarea for reliable cross-browser paste capture
 let activePasteId=null;
+// Create a hidden textarea that we focus to capture paste events
+const pasteCapture=document.createElement('textarea');
+pasteCapture.style.cssText='position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;';
+document.body.appendChild(pasteCapture);
+pasteCapture.addEventListener('paste', e=>{
+  const clipItems=Array.from(e.clipboardData?.items||[]);
+  for(let item of clipItems){
+    if(item.type.startsWith('image/')){
+      e.preventDefault();
+      const targetId=activePasteId||'li-1';
+      readImgFile(item.getAsFile(), targetId);
+      showToast('Image pasted successfully!');
+      const btn=document.getElementById('paste-btn-'+targetId);
+      if(btn){btn.style.background='var(--green-bg)';btn.style.color='var(--green)';btn.textContent='Image pasted! Click to paste another';}
+      setTimeout(()=>{
+        if(btn){btn.style.background='var(--accent-light)';btn.style.color='var(--accent)';btn.textContent='Paste image (Ctrl+V)';}
+        activePasteId=null;
+      },3000);
+      break;
+    }
+  }
+  // Clear the textarea content after paste
+  setTimeout(()=>{pasteCapture.value='';},100);
+});
 window.activatePaste=(id)=>{
   activePasteId=id;
   // Reset all paste buttons
   document.querySelectorAll('[id^="paste-btn-"]').forEach(b=>{
-    b.style.background='var(--accent-light)';b.style.color='var(--accent)';b.textContent='Click then Ctrl+V to paste';
+    b.style.background='var(--accent-light)';b.style.color='var(--accent)';b.textContent='Paste image (Ctrl+V)';
   });
   // Highlight active one
   const btn=document.getElementById('paste-btn-'+id);
-  if(btn){btn.style.background='var(--accent)';btn.style.color='#fff';btn.textContent='Ready — press Ctrl+V now!';}
-  showToast('Part '+id.replace('li','')+' ready — press Ctrl+V to paste image');
+  if(btn){btn.style.background='var(--accent)';btn.style.color='#fff';btn.textContent='Ready! Now press Ctrl+V';}
+  // Focus the hidden textarea so it captures the paste
+  pasteCapture.focus();
+  showToast('Ready — now press Ctrl+V to paste your image');
 };
-document.addEventListener('paste', e=>{
-  const clipItems=e.clipboardData?.items||[];
-  for(let item of Array.from(clipItems)){
-    if(item.type.startsWith('image/')){
-      e.preventDefault();
-      const targetId=activePasteId||(document.querySelector('[id^="img-area-"]')?.id.replace('img-area-',''))||'li-1';
-      readImgFile(item.getAsFile(), targetId);
-      showToast('Image pasted!');
-      // Reset button
-      const btn=document.getElementById('paste-btn-'+targetId);
-      if(btn){btn.style.background='var(--accent-light)';btn.style.color='var(--accent)';btn.textContent='Click then Ctrl+V to paste';}
-      activePasteId=null;
-      break;
-    }
-  }
-}, true);
 
 window.addLineItem = (data={}) => {
   lineItemCount++;
@@ -554,7 +564,7 @@ window.addLineItem = (data={}) => {
         </div>
         <div style="display:flex;gap:6px;margin-top:6px">
           <button type="button" onclick="triggerImgUpload('${id}')" style="flex:1;padding:5px 8px;border:1px solid var(--border2);border-radius:4px;font-size:11px;cursor:pointer;background:var(--surface);font-family:inherit">Upload image</button>
-          <button type="button" onclick="activatePaste('${id}')" id="paste-btn-${id}" style="flex:1;padding:5px 8px;border:1px solid var(--accent);border-radius:4px;font-size:11px;cursor:pointer;background:var(--accent-light);color:var(--accent);font-family:inherit">Click then Ctrl+V to paste</button>
+          <button type="button" onclick="activatePaste('${id}')" id="paste-btn-${id}" style="flex:1;padding:5px 8px;border:1px solid var(--accent);border-radius:4px;font-size:11px;cursor:pointer;background:var(--accent-light);color:var(--accent);font-family:inherit">Paste image (Ctrl+V)</button>
         </div>
         <input type="file" id="img-file-${id}" accept="image/*" style="display:none" onchange="handleImgFile(event,'${id}')">
       </div>
@@ -792,8 +802,16 @@ function renderDashboard(){
   const winRate=total?Math.round((won/total)*100):0;
   const totalValue=allQ.reduce((s,q)=>s+((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0)),0);
   const wonValue=allQ.filter(q=>q.status==='Won').reduce((s,q)=>s+((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0)),0);
-  const totalPotProfit=allQ.reduce((s,q)=>s+(parseFloat(q.potentialProfit)||0),0);
-  const wonPotProfit=allQ.filter(q=>q.status==='Won').reduce((s,q)=>s+(parseFloat(q.potentialProfit)||0),0);
+  // Calculate potential profit live from lineItems (don't rely on stored value)
+  function calcQuoteProfit(q){
+    const items=q.lineItems||[];
+    const finalPrice=parseFloat(q.finalPrice)||((parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0));
+    const totalSelInc=items.reduce((s,i)=>s+(parseFloat(i.sellingPriceInc)||0),0);
+    const totalARPC=items.reduce((s,i)=>s+(parseFloat(i.arpcMarkup)||0)+(parseFloat(i.arpcDirectMarkup)||0),0);
+    return finalPrice - totalSelInc + totalARPC;
+  }
+  const totalPotProfit=allQ.reduce((s,q)=>s+calcQuoteProfit(q),0);
+  const wonPotProfit=allQ.filter(q=>q.status==='Won').reduce((s,q)=>s+calcQuoteProfit(q),0);
   document.getElementById('stats-grid').innerHTML=`
     <div class="stat-card"><div class="stat-label">Total Quotes</div><div class="stat-value accent">${total}</div><div class="stat-sub">All users, all months</div></div>
     <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value green">${winRate}%</div><div class="stat-sub">${won} won of ${total}</div></div>
