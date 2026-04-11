@@ -94,7 +94,9 @@
   .action-btn { padding: 4px 8px; border-radius: 4px; border: none; background: transparent; cursor: pointer; font-size: 12px; color: var(--text3); transition: all 0.15s; }
   .action-btn:hover { background: var(--surface2); color: var(--text); }
   .action-btn.danger:hover { background: var(--red-bg); color: var(--red); }
-  .action-btn.pdf { color: var(--accent); }
+  .action-btn.pdf { color: var(--accent); font-size: 11px; }
+  .action-btn.pdf.client { color: var(--accent2); }
+  .action-btn.pdf.client:hover { background: #e8edf7; color: var(--accent2); }
   .action-btn.pdf:hover { background: var(--accent-light); }
 
   .empty-state { text-align: center; padding: 3rem; color: var(--text3); }
@@ -460,7 +462,8 @@ function renderQuotes(){
         </select>
       </td>
       <td>
-        <button class="action-btn pdf" onclick='generatePDF("${q.id}")' title="Generate PDF">PDF</button>
+        <button class="action-btn pdf" onclick='generatePDF("${q.id}","internal")' title="Internal PDF (with part numbers)">Internal PDF</button>
+        <button class="action-btn pdf" onclick='generatePDF("${q.id}","client")' title="Client PDF (no part numbers)">Client PDF</button>
         <button class="action-btn" onclick='editQuote("${q.id}")'>Edit</button>
         <button class="action-btn danger" onclick='deleteQuote("${q.id}")'>Del</button>
       </td>
@@ -729,25 +732,32 @@ window.saveQuote = async () => {
 };
 
 // PDF GENERATION
-window.generatePDF = (id) => {
+// mode: 'internal' (shows part numbers) | 'client' (hides part numbers)
+window.generatePDF = (id, mode='internal') => {
   const q=allQuotes.find(x=>x.id===id);
   if(!q){showToast('Quote not found');return;}
+  const isClient = mode === 'client';
   const items=q.lineItems||[];
   const finalPrice=(parseFloat(q.quotedPrice)||0)+(parseFloat(q.courierCosts)||0);
   const statusColors={ Pending:'background:#fef3c7;color:#92400e', Won:'background:#dcfce7;color:#166534', Lost:'background:#fee2e2;color:#991b1b', Cancelled:'background:#f3f4f6;color:#6b7280' };
   const statusStyle=statusColors[q.status]||statusColors.Pending;
+  // Build table rows — internal shows Part Number column, client hides it
   const partsRows=items.map((p,i)=>`
     <tr>
       <td>${i+1}</td>
       <td>${p.make||''} ${p.model||''}</td>
       <td>${p.partDesc||'—'}</td>
-      <td style="font-family:monospace">${p.partNum||'—'}</td>
+      ${isClient ? '' : `<td style="font-family:monospace">${p.partNum||'—'}</td>`}
       <td>${p.partImage?`<img src="${p.partImage}" class="pdf-part-img" alt="Part">`:'-'}</td>
       <td style="text-align:right">R ${fmt(p.quotedPrice||0)}</td>
       <td style="text-align:right">R ${fmt(p.courierCosts||0)}</td>
     </tr>`).join('');
   const date=new Date();
   const validity=new Date(date.getTime()+30*24*60*60*1000);
+  // Label to distinguish the two PDF types
+  const pdfTypeLabel = isClient
+    ? '<div style="display:inline-block;padding:2px 10px;background:#1d2d5e;color:#fff;font-size:10px;font-weight:700;border-radius:4px;letter-spacing:0.06em;margin-top:6px">CLIENT COPY</div>'
+    : '<div style="display:inline-block;padding:2px 10px;background:#e85d04;color:#fff;font-size:10px;font-weight:700;border-radius:4px;letter-spacing:0.06em;margin-top:6px">INTERNAL USE ONLY</div>';
   const pdfHtml=`
     <div class="pdf-doc">
       <div class="pdf-header">
@@ -757,6 +767,7 @@ window.generatePDF = (id) => {
           <div class="pdf-quote-num">${q.quoteNum}</div>
           <div><span class="pdf-quote-status" style="${statusStyle}">${q.status}</span></div>
           <div style="font-size:11px;color:#6b7280;margin-top:8px">Date: ${q.day} ${q.month}</div>
+          ${pdfTypeLabel}
         </div>
       </div>
       <div class="pdf-section">
@@ -771,7 +782,7 @@ window.generatePDF = (id) => {
       <div class="pdf-section">
         <div class="pdf-section-title">Parts</div>
         <table class="pdf-parts-table">
-          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th><th>Part Number</th><th>Image</th><th style="text-align:right">Quoted Price</th><th style="text-align:right">Courier</th></tr></thead>
+          <thead><tr><th>#</th><th>Vehicle</th><th>Part Description</th>${isClient ? '' : '<th>Part Number</th>'}<th>Image</th><th style="text-align:right">Quoted Price</th><th style="text-align:right">Courier</th></tr></thead>
           <tbody>${partsRows}</tbody>
         </table>
       </div>
@@ -802,7 +813,7 @@ window.generatePDF = (id) => {
       <div class="pdf-footer" style="margin-top:12px">This is a computer-generated quotation document.</div>
     </div>`;
   document.getElementById('pdf-container').innerHTML=pdfHtml;
-  showToast('Opening PDF...');
+  showToast(isClient ? 'Opening Client PDF...' : 'Opening Internal PDF...');
   setTimeout(()=>window.print(),300);
 };
 
